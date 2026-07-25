@@ -9,6 +9,7 @@ class AdminStates(StatesGroup):
     waiting_for_movie_description = State()
     waiting_for_movie_genre = State()
     waiting_for_movie_year = State()
+    waiting_for_movie_country = State()
     waiting_for_poster = State()
     waiting_for_movie_category = State()
     waiting_for_delete_code = State()
