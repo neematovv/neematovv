@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     CHANNEL_INVITE_LINK: str
     BOT_USERNAME: str
     DATABASE_NAME: str = "cinema.db"
+    DATABASE_URL: str = "postgresql://postgres:postgres@localhost:5432/cinema_bot"
     
     START_TIME: float = time.time()
     VERSION: str = "3.0.0"
