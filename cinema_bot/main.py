@@ -3,6 +3,7 @@ import logging
 import sys
 import os
 from aiogram import Bot, Dispatcher
+from aiogram.types import Message
 from aiohttp import web
 from utils.config import config
 from database.db_manager import db_manager
@@ -36,11 +37,36 @@ async def start_web_server():
     logger.info(f"Veb-server {port}-portda ishga tushmoqda...")
     await site.start()
 
+# ===== ANTI-FLOOD MIDDLEWARE =====
+class AntiFloodMiddleware:
+    """Prevents users from spamming commands with a 0.5-second cooldown per user."""
+    def __init__(self, cooldown: float = 0.5):
+        self.cooldown = cooldown
+        self.last_message_time = {}
+
+    async def __call__(self, handler, event: Message, data: dict):
+        if not isinstance(event, Message):
+            return await handler(event, data)
+        
+        user_id = event.from_user.id
+        current_time = event.date.timestamp()
+        
+        if user_id in self.last_message_time:
+            time_diff = current_time - self.last_message_time[user_id]
+            if time_diff < self.cooldown:
+                return  # Silently ignore the message
+        
+        self.last_message_time[user_id] = current_time
+        return await handler(event, data)
+
 async def main():
     await db_manager.init_db()
 
     bot = Bot(token=config.BOT_TOKEN)
     dp = Dispatcher()
+
+    # Register anti-flood middleware on the message update type
+    dp.message.middleware(AntiFloodMiddleware(cooldown=0.5))
 
     # Linear Router sequence logic execution layers
     dp.include_router(admin_router)
