@@ -2,7 +2,7 @@ import asyncio
 import logging
 from aiogram import Router, Bot, F
 from aiogram.filters import Command
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 from aiogram.fsm.context import FSMContext
 from database.db_manager import db_manager
 from utils.config import config
@@ -54,7 +54,8 @@ async def display_admin_stats(callback: CallbackQuery):
     most_viewed = await db_manager.get_most_viewed_movie()
     today_views = await db_manager.get_today_views()
     avg_eps = await db_manager.get_avg_episodes_per_movie()
-    db_size_kb = db_manager.get_db_size_kb()
+    db_size_kb = await db_manager.get_db_size_kb()
+    db_ping = await db_manager.ping()
     text = (
         "📊 <b>Bot Statistikasi</b>\n\n"
         f"👥 <b>Foydalanuvchilar:</b> {total_users}\n"
@@ -65,7 +66,8 @@ async def display_admin_stats(callback: CallbackQuery):
         f"👁 <b>Ko'rishlar:</b> {total_searches}\n"
         f"📅 <b>Bugungi ko'rishlar:</b> {today_views}\n"
         f"🏆 <b>Eng ko'p ko'rilgan:</b> {most_viewed}\n"
-        f"💾 <b>Ma'lumotlar bazasi:</b> {db_size_kb} KB"
+        f"💾 <b>Ma'lumotlar bazasi:</b> {db_size_kb} KB\n"
+        f"⏱ <b>Database Ping:</b> {db_ping}ms"
     )
     kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🔙 Orqaga", callback_data="admin_menu_home")]])
     await callback.message.edit_text(text, parse_mode="HTML", reply_markup=kb)
@@ -113,37 +115,44 @@ async def fire_broadcast(callback: CallbackQuery, state: FSMContext, bot: Bot):
     await callback.message.answer(f"📊 <b>Tarqatish yakunlandi:</b>\n\n✅ Yuborildi: {sent}\n🚫 Bloklangan: {blocked}\n❌ Xatolik: {failed}", parse_mode="HTML")
     logger.info(f"Admin broadcast sent. Total: {sent}, Blocked: {blocked}, Failed: {failed}")
 
-# ===== 3. YANGI KINO/SERIAL QO'SHISH =====
+# ===== 3. YANGI KINO/SERIAL QO'SHISH (8 steps) =====
+def category_reply_keyboard() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(keyboard=[
+        [KeyboardButton(text="🎬 Kinolar"), KeyboardButton(text="📺 Seriallar")],
+        [KeyboardButton(text="🧸 Multfilmlar"), KeyboardButton(text="🎥 Trillerlar")],
+        [KeyboardButton(text="🇰🇷 Koreys Dramalari"), KeyboardButton(text="🌍 Boshqalar")]
+    ], resize_keyboard=True)
+
 @admin_router.callback_query(F.data == "admin_add_movie")
 async def start_add_movie(callback: CallbackQuery, state: FSMContext):
     await state.set_state(AdminStates.waiting_for_movie_code)
     await callback.answer()
-    await callback.message.edit_text("🔑 <b>1/7:</b> Kino/Serial kodini kiriting (bo'shliqsiz, noyob):", parse_mode="HTML")
+    await callback.message.edit_text("🔑 <b>1/8:</b> Kino/Serial kodini kiriting (bo'shliqsiz, noyob):", parse_mode="HTML")
 
 @admin_router.message(AdminStates.waiting_for_movie_code)
 async def add_movie_code(message: Message, state: FSMContext):
     code = message.text.strip().replace(" ", "")
     await state.update_data(movie_code=code)
     await state.set_state(AdminStates.waiting_for_movie_title)
-    await message.answer("🎬 <b>2/7:</b> Kino/Serial nomini kiriting:", parse_mode="HTML")
+    await message.answer("🎬 <b>2/8:</b> Kino/Serial nomini kiriting:", parse_mode="HTML")
 
 @admin_router.message(AdminStates.waiting_for_movie_title)
 async def add_movie_title(message: Message, state: FSMContext):
     await state.update_data(movie_title=message.text.strip())
     await state.set_state(AdminStates.waiting_for_movie_description)
-    await message.answer("📝 <b>3/7:</b> Kino/Serial tavsifini kiriting:", parse_mode="HTML")
+    await message.answer("📝 <b>3/8:</b> Kino/Serial tavsifini kiriting:", parse_mode="HTML")
 
 @admin_router.message(AdminStates.waiting_for_movie_description)
 async def add_movie_description(message: Message, state: FSMContext):
     await state.update_data(movie_desc=message.text.strip())
     await state.set_state(AdminStates.waiting_for_movie_genre)
-    await message.answer("🎭 <b>4/7:</b> Kino/Serial janrini kiriting:", parse_mode="HTML")
+    await message.answer("🎭 <b>4/8:</b> Kino/Serial janrini kiriting:", parse_mode="HTML")
 
 @admin_router.message(AdminStates.waiting_for_movie_genre)
 async def add_movie_genre(message: Message, state: FSMContext):
     await state.update_data(movie_genre=message.text.strip())
     await state.set_state(AdminStates.waiting_for_movie_year)
-    await message.answer("📅 <b>5/7:</b> Kino/Serial yilini kiriting (faqat raqam):", parse_mode="HTML")
+    await message.answer("📅 <b>5/8:</b> Kino/Serial yilini kiriting (faqat raqam):", parse_mode="HTML")
 
 @admin_router.message(AdminStates.waiting_for_movie_year)
 async def add_movie_year(message: Message, state: FSMContext):
@@ -152,13 +161,18 @@ async def add_movie_year(message: Message, state: FSMContext):
         return
     year = int(message.text.strip())
     await state.update_data(movie_year=year)
+    await state.set_state(AdminStates.waiting_for_movie_country)
+    await message.answer("🌍 <b>6/8:</b> Davlatni kiriting (masalan: AQSH, Janubiy Koreya, O'zbekiston):", parse_mode="HTML")
+
+@admin_router.message(AdminStates.waiting_for_movie_country)
+async def add_movie_country(message: Message, state: FSMContext):
+    country = message.text.strip()
+    await state.update_data(movie_country=country)
     await state.set_state(AdminStates.waiting_for_movie_category)
     await message.answer(
-        "📁 <b>6/7:</b> Kategoriyani kiriting:\n\n"
-        "Mavjud kategoriyalar:\n"
-        "🎬 Kinolar\n📺 Seriallar\n🎞 Multfilmlar\n🎌 Anime\n🇰🇷 Koreys Dramalari\n🌍 Boshqalar\n\n"
-        "Yuqoridagilardan birini yozing yoki o'zingizning kategoriyangizni kiriting:",
-        parse_mode="HTML"
+        "📁 <b>7/8:</b> Kategoriyani tanlang:",
+        parse_mode="HTML",
+        reply_markup=category_reply_keyboard()
     )
 
 @admin_router.message(AdminStates.waiting_for_movie_category)
@@ -166,7 +180,8 @@ async def add_movie_category(message: Message, state: FSMContext):
     category = message.text.strip()
     await state.update_data(movie_category=category)
     await state.set_state(AdminStates.waiting_for_poster)
-    await message.answer("🖼️ <b>7/7:</b> Kino uchun Poster (Rasm) faylini yuklang yoki File ID matnini yuboring:", parse_mode="HTML")
+    # Remove category keyboard, go back to normal
+    await message.answer("🖼️ <b>8/8:</b> Kino uchun Poster (Rasm) faylini yuklang yoki File ID matnini yuboring:", parse_mode="HTML", reply_markup=ReplyKeyboardRemove())
 
 @admin_router.message(AdminStates.waiting_for_poster)
 async def add_movie_poster(message: Message, state: FSMContext, bot: Bot):
@@ -183,7 +198,8 @@ async def add_movie_poster(message: Message, state: FSMContext, bot: Bot):
         code=data['movie_code'], title=data['movie_title'],
         description=data['movie_desc'], genre=data['movie_genre'],
         year=data['movie_year'], poster_file_id=poster_file_id,
-        category=data.get('movie_category')
+        category=data.get('movie_category'),
+        country=data.get('movie_country')
     )
     await state.clear()
     if ok:
@@ -294,7 +310,7 @@ async def confirm_delete_movie(callback: CallbackQuery, state: FSMContext):
     else:
         await callback.message.edit_text("❌ Xatolik yuz berdi, kino topilmadi.")
 
-# ===== 6. KINO/SEARIALNI TAHRIRLASH =====
+# ===== 6. KINO/SERIALNI TAHRIRLASH =====
 def build_edit_field_kb(movie_code: str) -> InlineKeyboardMarkup:
     fields = [
         ("🎬 Nomi", "title"),
@@ -392,7 +408,7 @@ async def edit_field_choose(callback: CallbackQuery, state: FSMContext):
         "language": "yangi tilni",
         "quality": "yangi sifatni",
         "status": "yangi statusni (Tugallangan/Davom etmoqda)",
-        "category": "yangi kategoriyasini (🎬 Kinolar, 📺 Seriallar, 🎞 Multfilmlar, 🎌 Anime, 🇰🇷 Koreys Dramalari, 🌍 Boshqalar)",
+        "category": "yangi kategoriyasini (🎬 Kinolar, 📺 Seriallar, 🧸 Multfilmlar, 🎥 Trillerlar, 🇰🇷 Koreys Dramalari, 🌍 Boshqalar)",
     }
     label = field_names.get(field, "yangi qiymatini")
     await callback.message.edit_text(f"✏️ <b>{label}</b> kiriting:", parse_mode="HTML")
@@ -570,7 +586,7 @@ def settings_kb(settings: dict) -> InlineKeyboardMarkup:
         [toggle_btn("🔧 Xizmat rejimi", "maintenance", settings.get("maintenance", "0"))],
         [toggle_btn("📢 Kanalga majburiy obuna", "force_join", settings.get("force_join", "1"))],
         [InlineKeyboardButton(text="📢 Majburiy Obuna", callback_data="admin_force_sub")],
-        [InlineKeyboardButton(text=" Orqaga", callback_data="admin_menu_home")]
+        [InlineKeyboardButton(text="⬅️ Orqaga", callback_data="admin_menu_home")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
