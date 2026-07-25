@@ -50,6 +50,8 @@ def build_episode_matrix(movie_code: str, episodes: list, movie: dict = None) ->
     bot_username = config.BOT_USERNAME.replace("@", "").strip()
     share_url = f"https://t.me/{bot_username}?start={movie_code}"
     keyboard.append([InlineKeyboardButton(text="📢 Do'stlarga Ulashish", url=share_url)])
+    # Add favorites button
+    keyboard.append([InlineKeyboardButton(text="⭐ Saralanganlarga qo'shish", callback_data=f"fav_add_{movie_code}")])
     return InlineKeyboardMarkup(inline_keyboard=keyboard)
 
 def build_category_keyboard(categories: list = None) -> InlineKeyboardMarkup:
@@ -95,8 +97,12 @@ def build_share_keyboard(movie_code: str, movie: dict = None) -> InlineKeyboardM
     share_url = f"https://t.me/{bot_username}?start={movie_code}"
     kb_buttons = []
     if movie and movie.get('trailer_url'):
-        kb_buttons.append([InlineKeyboardButton(text="🎥 Trailer", url=movie['trailer_url'])])
+        kb_buttons.append([InlineKeyboardButton(text="🎥 Treylerni Ko'rish", url=movie['trailer_url'])])
+    # If no episodes exist, show "Kinoni Ko'rish" button that alerts
+    kb_buttons.append([InlineKeyboardButton(text="🎬 Kinoni Ko'rish", callback_data=f"movie_not_ready_{movie_code}")])
     kb_buttons.append([InlineKeyboardButton(text="📢 Do'stlarga Ulashish", url=share_url)])
+    # Add favorites button
+    kb_buttons.append([InlineKeyboardButton(text="⭐ Saralanganlarga qo'shish", callback_data=f"fav_add_{movie_code}")])
     return InlineKeyboardMarkup(inline_keyboard=kb_buttons)
 
 @movie_router.message(F.text == "🎬 Kino Izlash")
@@ -119,7 +125,7 @@ async def show_movie_catalog(message: Message, bot: Bot):
     await message.answer(
         "🎬 <b>Kategoriyalar</b>\n\nKerakli kategoriyani tanlang:",
         parse_mode="HTML",
-        reply_markup=build_category_keyboard()
+        reply_markup=build_category_keyboard(categories)
     )
 
 @movie_router.callback_query(F.data.startswith("cat_"))
@@ -165,7 +171,7 @@ async def back_to_categories(callback: CallbackQuery):
     await callback.message.edit_text(
         "🎬 <b>Kategoriyalar</b>\n\nKerakli kategoriyani tanlang:",
         parse_mode="HTML",
-        reply_markup=build_category_keyboard()
+        reply_markup=build_category_keyboard(categories)
     )
 
 @movie_router.callback_query(F.data == "noop")
@@ -175,10 +181,10 @@ async def noop_callback(callback: CallbackQuery):
 @movie_router.message(SearchStates.waiting_for_query)
 @movie_router.message(F.text, StateFilter(None))
 async def process_movie_search(message: Message, bot: Bot, state: FSMContext):
-    menu_buttons = {"🎬 Kinolar Ro'yxati", "🎬 Kino Izlash", "👤 Profilim", "❓ Yordam"}
+    menu_buttons = {"🎬 Kinolar Ro'yxati", "🎬 Kino Izlash", "👤 Profilim", "❓ Yordam", "⭐ Saralanganlar"}
     if message.text in menu_buttons:
         await state.clear()
-        from handlers.user import view_profile, cmd_help
+        from handlers.user import view_profile, cmd_help, show_favorites
         if message.text == "👤 Profilim":
             await view_profile(message, bot)
         elif message.text == "❓ Yordam":
@@ -187,6 +193,8 @@ async def process_movie_search(message: Message, bot: Bot, state: FSMContext):
             await init_search_flow(message, bot, state)
         elif message.text == "🎬 Kinolar Ro'yxati":
             await show_movie_catalog(message, bot)
+        elif message.text == "⭐ Saralanganlar":
+            await show_favorites(message, bot)
         return
     if not await check_user_subscription(bot, message.from_user.id):
         kb = await build_sub_kb(bot, message.from_user.id)
@@ -285,3 +293,61 @@ async def open_movie(callback: CallbackQuery):
     keyboard = build_episode_matrix(movie_code, episodes, movie)
     await callback.message.answer(caption, parse_mode="HTML", reply_markup=keyboard)
     await callback.answer()
+
+# ===== SMART TRAILER & MOVIE SELECTION =====
+@movie_router.callback_query(F.data.startswith("movie_not_ready_"))
+async def movie_not_ready(callback: CallbackQuery):
+    await callback.answer(
+        "Ushbu kino hali ma'lumotlar bazasiga joylanmagan yoki premyera qilinmagan!",
+        show_alert=True
+    )
+
+# ===== FAVORITES SYSTEM =====
+@movie_router.callback_query(F.data.startswith("fav_add_"))
+async def add_to_favorites(callback: CallbackQuery):
+    movie_code = callback.data.replace("fav_add_", "")
+    user_id = callback.from_user.id
+    is_fav = await db_manager.is_favorite(user_id, movie_code)
+    if is_fav:
+        await callback.answer("Bu kino allaqachon saralanganlarda mavjud!", show_alert=True)
+        return
+    ok = await db_manager.add_favorite(user_id, movie_code)
+    if ok:
+        await callback.answer("⭐ Saralanganlarga qo'shildi!", show_alert=True)
+        # Update the button to show remove option
+        try:
+            movie = await db_manager.get_movie_by_code(movie_code)
+            episodes = await db_manager.get_episodes(movie_code)
+            caption = build_movie_caption(movie, episodes, movie_code)
+            if episodes:
+                kb = build_episode_matrix(movie_code, episodes, movie)
+            else:
+                kb = build_share_keyboard(movie_code, movie)
+            # Replace the last button row with remove favorite
+            kb.inline_keyboard[-1] = [InlineKeyboardButton(text="❌ Saralanganlardan o'chirish", callback_data=f"fav_remove_{movie_code}")]
+            await callback.message.edit_reply_markup(reply_markup=kb)
+        except Exception as e:
+            logger.error(f"Favorites button update error: {e}")
+    else:
+        await callback.answer("Xatolik yuz berdi!", show_alert=True)
+
+@movie_router.callback_query(F.data.startswith("fav_remove_"))
+async def remove_from_favorites(callback: CallbackQuery):
+    movie_code = callback.data.replace("fav_remove_", "")
+    user_id = callback.from_user.id
+    ok = await db_manager.remove_favorite(user_id, movie_code)
+    if ok:
+        await callback.answer("❌ Saralanganlardan o'chirildi!", show_alert=True)
+        # Update the button back to add
+        try:
+            movie = await db_manager.get_movie_by_code(movie_code)
+            episodes = await db_manager.get_episodes(movie_code)
+            if episodes:
+                kb = build_episode_matrix(movie_code, episodes, movie)
+            else:
+                kb = build_share_keyboard(movie_code, movie)
+            await callback.message.edit_reply_markup(reply_markup=kb)
+        except Exception as e:
+            logger.error(f"Favorites button update error: {e}")
+    else:
+        await callback.answer("Xatolik yuz berdi!", show_alert=True)
