@@ -2,3 +2,4 @@ aiogram
 aiosqlite
 pydantic
 pydantic-settings
+asyncpg
